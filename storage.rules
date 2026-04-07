@@ -1,0 +1,20 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /materials/{allPaths=**} {
+      // Allow read access to all authenticated users
+      allow read: if request.auth != null;
+
+      // Allow write access only to authenticated users with admin or dosen roles
+      // Note: We can't check Firestore roles directly in Storage rules
+      // So we allow authenticated users to upload, and handle role checking in the app
+      allow write: if request.auth != null;
+
+      // Alternative: If you want stricter rules, you could use custom claims
+      // allow write: if request.auth != null &&
+      //               (request.auth.token.admin == true ||
+      //                request.auth.token.role == 'admin' ||
+      //                request.auth.token.role == 'dosen');
+    }
+  }
+}

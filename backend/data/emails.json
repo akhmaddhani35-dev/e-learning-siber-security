@@ -1,0 +1,102 @@
+[
+  {
+    "id": 1,
+    "text": "Halo mahasiswa, materi minggu ini sudah tersedia di LMS kampus. Silakan pelajari sebelum pertemuan Jumat.",
+    "label": "legit"
+  },
+  {
+    "id": 2,
+    "text": "URGENT! Akun email kampus Anda akan diblokir dalam 24 jam. Verifikasi sekarang di https://bit.ly/verify-campus-login",
+    "label": "phishing"
+  },
+  {
+    "id": 3,
+    "text": "Dosen telah mengunggah quiz baru pada mata kuliah Keamanan Jaringan. Kerjakan sebelum Senin pukul 23.59.",
+    "label": "legit"
+  },
+  {
+    "id": 4,
+    "text": "Segera konfirmasi password dan OTP Anda agar akun tidak dinonaktifkan: https://secure-campus-login-account-update.com",
+    "label": "phishing"
+  },
+  {
+    "id": 5,
+    "text": "Pengumuman: jadwal presentasi proyek keamanan siber dipindah ke hari Kamis pukul 10.00 WIB.",
+    "label": "legit"
+  },
+  {
+    "id": 6,
+    "text": "Selamat! Anda mendapat hadiah laptop. Klaim sekarang melalui https://tinyurl.com/free-laptop-claim",
+    "label": "phishing"
+  },
+  {
+    "id": 7,
+    "text": "File panduan praktikum telah dibagikan melalui folder kelas resmi dan bisa diakses menggunakan akun kampus.",
+    "label": "legit"
+  },
+  {
+    "id": 8,
+    "text": "Micr0soft Security Center meminta Anda login ulang untuk menghindari suspend akun: https://micr0soft-account-check.net",
+    "label": "phishing"
+  },
+  {
+    "id": 9,
+    "text": "Harap hadir tepat waktu pada sesi evaluasi quiz minggu ini. Nilai akan langsung masuk dashboard mahasiswa.",
+    "label": "legit"
+  },
+  {
+    "id": 10,
+    "text": "Akun Anda terdeteksi bermasalah. Kirim kode verifikasi, password, dan PIN untuk proses pemulihan.",
+    "label": "phishing"
+  },
+  {
+    "id": 11,
+    "text": "Tim pengajar mengingatkan untuk membaca materi phishing awareness sebelum mengerjakan quiz latihan.",
+    "label": "legit"
+  },
+  {
+    "id": 12,
+    "text": "PaypaI Warning: aktivitas mencurigakan terdeteksi. Login di https://paypal-login-alert-security.net sekarang.",
+    "label": "phishing"
+  },
+  {
+    "id": 13,
+    "text": "Nilai kuis Anda sudah tersedia dan dapat dilihat pada dashboard mahasiswa setelah login menggunakan akun kampus.",
+    "label": "legit"
+  },
+  {
+    "id": 14,
+    "text": "SEGERA buka lampiran update-akun.zip agar email kampus tetap aktif.",
+    "label": "phishing"
+  },
+  {
+    "id": 15,
+    "text": "Materi tambahan tentang social engineering telah ditambahkan oleh dosen pada modul minggu ke-4.",
+    "label": "legit"
+  },
+  {
+    "id": 16,
+    "text": "G00gle Education Notice: akun Anda akan dihapus. Verifikasi sekarang di https://bit.ly/google-campus-check",
+    "label": "phishing"
+  },
+  {
+    "id": 17,
+    "text": "Pengumuman resmi dari prodi: workshop cyber hygiene akan dilaksanakan secara daring pada Sabtu pagi.",
+    "label": "legit"
+  },
+  {
+    "id": 18,
+    "text": "Kami mendeteksi aktivitas tidak biasa. Klik https://campus-login-security-check-update.com dan masukkan OTP.",
+    "label": "phishing"
+  },
+  {
+    "id": 19,
+    "text": "Silakan cek forum diskusi untuk melihat umpan balik dosen terhadap tugas analisis email phishing Anda.",
+    "label": "legit"
+  },
+  {
+    "id": 20,
+    "text": "Amazon Edu Reward memberi bonus akun premium. Klaim hadiah dengan login sekarang juga.",
+    "label": "phishing"
+  }
+]

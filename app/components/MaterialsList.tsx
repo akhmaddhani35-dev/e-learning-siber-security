@@ -129,7 +129,7 @@ export default function MaterialsList() {
                   </div>
                 </div>
                 <button className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-2 rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all duration-200 transform hover:scale-105 font-semibold text-sm">
-                  <a href="/register">Belajar Sekarang</a>
+                  <a href="/login">Belajar Sekarang</a>
                 </button>
               </div>
             </div>

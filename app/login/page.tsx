@@ -24,14 +24,16 @@ export default function LoginPage() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
     setError('');
 
-    try {
-      if (!email || !password) {
-        throw new Error('Email dan password harus diisi.');
-      }
+    if (!email || !password) {
+      setError('Email dan password harus diisi.');
+      return;
+    }
 
+    setLoading(true);
+
+    try {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
       const userRef = doc(db, 'users', user.uid);
@@ -80,7 +82,6 @@ export default function LoginPage() {
         throw new Error('Role tidak valid');
       }
     } catch (err: unknown) {
-      console.error('Login error:', err);
       let message = 'Terjadi kesalahan saat login.';
       const errorCode = typeof err === 'object' && err !== null && 'code' in err
         ? String((err as { code?: unknown }).code)
@@ -93,15 +94,41 @@ export default function LoginPage() {
         message = errorMessage;
       }
 
-      if (errorCode === 'auth/user-not-found') {
-        message = 'Email tidak ditemukan';
-      } else if (errorCode === 'auth/wrong-password') {
-        message = 'Password salah';
+      if (
+        errorCode === 'auth/invalid-credential' ||
+        errorCode === 'auth/invalid-login-credentials' ||
+        errorCode === 'auth/user-not-found' ||
+        errorCode === 'auth/wrong-password'
+      ) {
+        message = 'Email atau password tidak valid.';
       } else if (errorCode === 'auth/configuration-not-found') {
         message = 'Firebase Authentication belum diaktifkan';
+      } else if (errorCode === 'auth/invalid-api-key') {
+        message = 'Konfigurasi Firebase tidak valid. Periksa NEXT_PUBLIC_FIREBASE_API_KEY.';
+      } else if (errorCode === 'auth/app-not-authorized') {
+        message = 'Aplikasi ini belum diotorisasi di Firebase Authentication.';
+      } else if (errorCode === 'auth/network-request-failed') {
+        message = 'Gagal terhubung ke Firebase. Periksa koneksi internet dan konfigurasi project.';
       } else if (errorCode === 'permission-denied') {
         message = 'Akses Firestore ditolak. Pastikan firestore.rules terbaru sudah di-deploy.';
       }
+
+      const handledAuthErrors = new Set([
+        'auth/invalid-credential',
+        'auth/invalid-login-credentials',
+        'auth/user-not-found',
+        'auth/wrong-password',
+        'auth/configuration-not-found',
+        'auth/invalid-api-key',
+        'auth/app-not-authorized',
+        'auth/network-request-failed',
+        'permission-denied',
+      ]);
+
+      if (!handledAuthErrors.has(errorCode)) {
+        console.error('Login error:', err);
+      }
+
       setError(message);
     } finally {
       setLoading(false);

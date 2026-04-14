@@ -16,17 +16,21 @@ export default function RegisterPage() {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
     setError('');
 
-    try {
-      if (!email || !password) {
-        throw new Error('Email dan password harus diisi.');
-      }
-      if (password.length < 6) {
-        throw new Error('Password minimal 6 karakter.');
-      }
+    if (!email || !password) {
+      setError('Email dan password harus diisi.');
+      return;
+    }
 
+    if (password.length < 6) {
+      setError('Password minimal 6 karakter.');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
@@ -38,16 +42,31 @@ export default function RegisterPage() {
       });
 
       router.push('/login');
-    } catch (err: any) {
-      console.error('Register error:', err);
-      let message = err?.message || 'Terjadi kesalahan saat mendaftar.';
+    } catch (err: unknown) {
+      const errorCode = typeof err === 'object' && err !== null && 'code' in err
+        ? String((err as { code?: unknown }).code)
+        : '';
+      const errorMessage = typeof err === 'object' && err !== null && 'message' in err
+        ? String((err as { message?: unknown }).message)
+        : '';
+      let message = errorMessage || 'Terjadi kesalahan saat mendaftar.';
 
-      if (err?.code === 'auth/weak-password') {
+      if (errorCode === 'auth/weak-password') {
         message = 'Password terlalu lemah. Gunakan minimal 6 karakter.';
-      } else if (err?.code === 'auth/email-already-in-use') {
+      } else if (errorCode === 'auth/email-already-in-use') {
         message = 'Email sudah digunakan.';
-      } else if (err?.code === 'auth/configuration-not-found') {
+      } else if (errorCode === 'auth/configuration-not-found') {
         message = 'Firebase Authentication belum diaktifkan. Periksa Firebase Console.';
+      }
+
+      const handledAuthErrors = new Set([
+        'auth/weak-password',
+        'auth/email-already-in-use',
+        'auth/configuration-not-found',
+      ]);
+
+      if (!handledAuthErrors.has(errorCode)) {
+        console.error('Register error:', err);
       }
 
       setError(message);

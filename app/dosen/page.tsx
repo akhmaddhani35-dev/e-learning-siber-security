@@ -4,6 +4,15 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { collection, addDoc, getDocs, Timestamp, doc, getDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+import {
+  createAttendanceSession,
+  DEFAULT_COURSE_ID,
+  getAttendanceSessionReport,
+  getAttendanceSessions,
+  isDeadlinePassed,
+  type AttendanceReportItem,
+  type AttendanceSession,
+} from '../../lib/attendance';
 
 interface User {
   uid: string;
@@ -18,6 +27,20 @@ interface QuizQuestion {
   correctAnswer: string;
 }
 
+interface QuizQuestionDoc {
+  question?: string;
+  options?: string[];
+  correctAnswer?: string;
+}
+
+interface AttendanceFormState {
+  title: string;
+  date: string;
+  deadline: string;
+}
+
+const COURSE_ID = DEFAULT_COURSE_ID;
+
 export default function DosenPage() {
   const [user, setUser] = useState<User | null>(null);
   const [question, setQuestion] = useState('');
@@ -25,8 +48,39 @@ export default function DosenPage() {
   const [correctAnswer, setCorrectAnswer] = useState('');
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
   const [status, setStatus] = useState('');
+  const [attendanceStatus, setAttendanceStatus] = useState('');
+  const [attendanceForm, setAttendanceForm] = useState<AttendanceFormState>({
+    title: '',
+    date: '',
+    deadline: '',
+  });
+  const [attendanceSessions, setAttendanceSessions] = useState<AttendanceSession[]>([]);
+  const [attendanceReport, setAttendanceReport] = useState<AttendanceReportItem[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState('');
+  const [loadingAttendance, setLoadingAttendance] = useState(false);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
+  const formatDate = (value: string) =>
+    new Date(value).toLocaleString('id-ID', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    });
+
+  const getAttendanceLabel = (attendanceState: string) => {
+    if (attendanceState === 'hadir') return 'Hadir';
+    if (attendanceState === 'izin') return 'Izin';
+    return 'Tidak Hadir';
+  };
+
+  const getAttendanceBadgeClass = (attendanceState: string) => {
+    if (attendanceState === 'hadir') {
+      return 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-200';
+    }
+    if (attendanceState === 'izin') {
+      return 'bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-200';
+    }
+    return 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-200';
+  };
 
   useEffect(() => {
     const verifyAndSetUser = async () => {
@@ -59,6 +113,24 @@ export default function DosenPage() {
           role: firestoreData.role,
         });
         await loadQuestions();
+
+        setLoadingAttendance(true);
+        try {
+          const sessions = await getAttendanceSessions(COURSE_ID);
+          setAttendanceSessions(sessions);
+
+          const currentSessionId = sessions[0]?.id || '';
+          if (currentSessionId) {
+            const report = await getAttendanceSessionReport(currentSessionId);
+            setSelectedSessionId(currentSessionId);
+            setAttendanceReport(report);
+          }
+        } catch (attendanceError) {
+          console.error('initial attendance load error', attendanceError);
+          setAttendanceStatus('Gagal memuat data absensi.');
+        } finally {
+          setLoadingAttendance(false);
+        }
       } catch (err) {
         console.error('Error verifying user:', err);
         router.push('/login');
@@ -75,10 +147,10 @@ export default function DosenPage() {
       setLoading(true);
       const snapshot = await getDocs(collection(db, 'quizQuestions'));
       const list: QuizQuestion[] = snapshot.docs.map((docSnap) => {
-        const data = docSnap.data() as any;
+        const data = docSnap.data() as QuizQuestionDoc;
         return {
           id: docSnap.id,
-          question: data.question,
+          question: data.question ?? '',
           options: data.options || [],
           correctAnswer: data.correctAnswer || '',
         };
@@ -89,6 +161,29 @@ export default function DosenPage() {
       setStatus('Gagal memuat soal kuis.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadAttendanceSessions = async () => {
+    try {
+      setLoadingAttendance(true);
+      const sessions = await getAttendanceSessions(COURSE_ID);
+      setAttendanceSessions(sessions);
+
+      const currentSessionId = selectedSessionId || sessions[0]?.id || '';
+      if (currentSessionId) {
+        const report = await getAttendanceSessionReport(currentSessionId);
+        setSelectedSessionId(currentSessionId);
+        setAttendanceReport(report);
+      } else {
+        setSelectedSessionId('');
+        setAttendanceReport([]);
+      }
+    } catch (err) {
+      console.error('loadAttendanceSessions error', err);
+      setAttendanceStatus('Gagal memuat data absensi.');
+    } finally {
+      setLoadingAttendance(false);
     }
   };
 
@@ -122,6 +217,46 @@ export default function DosenPage() {
     } catch (err) {
       console.error('submitQuestion error', err);
       setStatus('Gagal menambahkan soal kuis.');
+    }
+  };
+
+  const handleAttendanceFormChange = (field: keyof AttendanceFormState, value: string) => {
+    setAttendanceForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleCreateAttendanceSession = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+
+    try {
+      setAttendanceStatus('Menyimpan sesi absensi...');
+      await createAttendanceSession({
+        course_id: COURSE_ID,
+        title: attendanceForm.title,
+        date: attendanceForm.date,
+        deadline: attendanceForm.deadline,
+        created_by: user.uid,
+      });
+      setAttendanceForm({ title: '', date: '', deadline: '' });
+      setAttendanceStatus('Sesi absensi berhasil dibuat.');
+      await loadAttendanceSessions();
+    } catch (err) {
+      console.error('handleCreateAttendanceSession error', err);
+      setAttendanceStatus(err instanceof Error ? err.message : 'Gagal membuat sesi absensi.');
+    }
+  };
+
+  const handleViewAttendanceReport = async (sessionId: string) => {
+    try {
+      setLoadingAttendance(true);
+      setSelectedSessionId(sessionId);
+      const report = await getAttendanceSessionReport(sessionId);
+      setAttendanceReport(report);
+    } catch (err) {
+      console.error('handleViewAttendanceReport error', err);
+      setAttendanceStatus('Gagal memuat rekap absensi.');
+    } finally {
+      setLoadingAttendance(false);
     }
   };
 
@@ -217,6 +352,132 @@ export default function DosenPage() {
               Tambah Soal
             </button>
           </form>
+        </div>
+
+        <div className="bg-white dark:bg-gray-800 p-8 rounded-3xl shadow-xl border border-gray-200 dark:border-gray-700 mb-8">
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Kelola Absensi Mahasiswa</h2>
+          {attendanceStatus && (
+            <div className="mb-6 rounded-xl bg-blue-50 dark:bg-blue-900/80 border border-blue-200 dark:border-blue-800 p-4 text-blue-900 dark:text-blue-100">
+              {attendanceStatus}
+            </div>
+          )}
+          <form onSubmit={handleCreateAttendanceSession} className="grid gap-4 md:grid-cols-2 mb-8">
+            <div className="md:col-span-2">
+              <label className="block text-gray-700 dark:text-gray-300 font-medium mb-2">Judul Pertemuan</label>
+              <input
+                value={attendanceForm.title}
+                onChange={(e) => handleAttendanceFormChange('title', e.target.value)}
+                className="w-full rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                type="text"
+                placeholder="Contoh: Pertemuan 1"
+              />
+            </div>
+            <div>
+              <label className="block text-gray-700 dark:text-gray-300 font-medium mb-2">Tanggal Pertemuan</label>
+              <input
+                value={attendanceForm.date}
+                onChange={(e) => handleAttendanceFormChange('date', e.target.value)}
+                className="w-full rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                type="datetime-local"
+              />
+            </div>
+            <div>
+              <label className="block text-gray-700 dark:text-gray-300 font-medium mb-2">Deadline Absensi</label>
+              <input
+                value={attendanceForm.deadline}
+                onChange={(e) => handleAttendanceFormChange('deadline', e.target.value)}
+                className="w-full rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                type="datetime-local"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <button
+                type="submit"
+                className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-3 rounded-xl font-semibold hover:from-blue-700 hover:to-purple-700 transition-all duration-200"
+              >
+                Buat Sesi Absensi
+              </button>
+            </div>
+          </form>
+
+          {loadingAttendance ? (
+            <p className="text-gray-600 dark:text-gray-300">Memuat sesi absensi...</p>
+          ) : attendanceSessions.length === 0 ? (
+            <p className="text-gray-600 dark:text-gray-300">Belum ada sesi absensi untuk course ini.</p>
+          ) : (
+            <div className="space-y-6">
+              <div className="overflow-x-auto rounded-2xl border border-gray-200 dark:border-gray-700">
+                <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                  <thead className="bg-gray-50 dark:bg-gray-900">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Judul</th>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Tanggal</th>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Deadline</th>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Status</th>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
+                    {attendanceSessions.map((session) => (
+                      <tr key={session.id}>
+                        <td className="px-4 py-4 text-sm text-gray-900 dark:text-white">{session.title}</td>
+                        <td className="px-4 py-4 text-sm text-gray-600 dark:text-gray-300">{formatDate(session.date)}</td>
+                        <td className="px-4 py-4 text-sm text-gray-600 dark:text-gray-300">{formatDate(session.deadline)}</td>
+                        <td className="px-4 py-4 text-sm">
+                          <span className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${isDeadlinePassed(session.deadline) ? 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-200' : 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-200'}`}>
+                            {isDeadlinePassed(session.deadline) ? 'Ditutup' : 'Aktif'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4 text-sm">
+                          <button
+                            onClick={() => handleViewAttendanceReport(session.id)}
+                            className="rounded-xl border border-gray-200 dark:border-gray-700 px-4 py-2 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900"
+                            type="button"
+                          >
+                            Lihat Rekap
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {selectedSessionId && (
+                <div className="rounded-2xl bg-gray-50 dark:bg-gray-900 p-6 border border-gray-200 dark:border-gray-700">
+                  <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Rekap Absensi Mahasiswa</h3>
+                  {attendanceReport.length === 0 ? (
+                    <p className="text-gray-600 dark:text-gray-300">Belum ada data mahasiswa untuk sesi ini.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                        <thead>
+                          <tr>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Mahasiswa</th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Status</th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Alasan</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                          {attendanceReport.map((item) => (
+                            <tr key={item.user_id}>
+                              <td className="px-4 py-4 text-sm text-gray-900 dark:text-white">{item.email}</td>
+                              <td className="px-4 py-4 text-sm">
+                                <span className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${getAttendanceBadgeClass(item.status)}`}>
+                                  {getAttendanceLabel(item.status)}
+                                </span>
+                              </td>
+                              <td className="px-4 py-4 text-sm text-gray-600 dark:text-gray-300">{item.reason || '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="bg-white dark:bg-gray-800 p-8 rounded-3xl shadow-xl border border-gray-200 dark:border-gray-700">

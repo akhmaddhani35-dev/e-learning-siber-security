@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readFromFirestore, verifyFirebaseIdToken, writeToFirestore } from '../../../lib/firebase-admin';
+import { normalizeDeadline } from '../../../lib/deadline';
 
 type Role = 'admin' | 'dosen' | 'mahasiswa';
 
@@ -13,6 +14,7 @@ interface QuizQuestionPayload {
   question?: unknown;
   options?: unknown;
   correctAnswer?: unknown;
+  deadline?: unknown;
 }
 
 function extractBearerToken(request: NextRequest): string | null {
@@ -49,9 +51,10 @@ export async function POST(request: NextRequest) {
       ? body.options.map((item) => (typeof item === 'string' ? item.trim() : ''))
       : [];
     const correctAnswer = typeof body.correctAnswer === 'string' ? body.correctAnswer.trim() : '';
+    const deadline = typeof body.deadline === 'string' ? normalizeDeadline(body.deadline) : '';
 
-    if (!question || options.length !== 4 || options.some((item) => !item) || !correctAnswer) {
-      return NextResponse.json({ error: 'Pertanyaan, 4 opsi, dan jawaban benar wajib diisi.' }, { status: 400 });
+    if (!question || options.length !== 4 || options.some((item) => !item) || !correctAnswer || !deadline) {
+      return NextResponse.json({ error: 'Pertanyaan, 4 opsi, jawaban benar, dan deadline wajib diisi.' }, { status: 400 });
     }
 
     if (!options.includes(correctAnswer)) {
@@ -63,6 +66,7 @@ export async function POST(request: NextRequest) {
       question,
       options,
       correctAnswer,
+      deadline,
       authorUid: authUser.uid,
       authorEmail: authUser.email,
       createdAt: new Date().toISOString(),
@@ -71,9 +75,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, id: questionId });
   } catch (error) {
     console.error('Error creating quiz question:', error);
+    const message = error instanceof Error ? error.message : 'Gagal menambahkan soal quiz.';
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Gagal menambahkan soal quiz.' },
-      { status: 500 }
+      { error: message },
+      { status: message.includes('deadline') || message.includes('Format') ? 400 : 500 }
     );
   }
 }

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { collection, addDoc, getDocs, Timestamp, doc, getDoc } from 'firebase/firestore';
-import { db } from '../../lib/firebase';
+import { auth, db } from '../../lib/firebase';
 import {
   createAttendanceSession,
   DEFAULT_COURSE_ID,
@@ -27,7 +27,7 @@ interface QuizQuestion {
   correctAnswer: string;
 }
 
-interface QuizQuestionDoc {
+interface QuizQuestionRecord {
   question?: string;
   options?: string[];
   correctAnswer?: string;
@@ -40,7 +40,6 @@ interface AttendanceFormState {
 }
 
 const COURSE_ID = DEFAULT_COURSE_ID;
-
 export default function DosenPage() {
   const [user, setUser] = useState<User | null>(null);
   const [question, setQuestion] = useState('');
@@ -142,15 +141,35 @@ export default function DosenPage() {
     verifyAndSetUser();
   }, [router]);
 
+  const logRoleActivity = async (action: string, metadata?: Record<string, unknown>) => {
+    try {
+      if (!auth.currentUser) {
+        return;
+      }
+
+      const idToken = await auth.currentUser.getIdToken();
+      await fetch('/api/system-logs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ action, metadata }),
+      });
+    } catch {
+      // Logging tidak boleh memblokir flow dosen.
+    }
+  };
+
   const loadQuestions = async () => {
     try {
       setLoading(true);
       const snapshot = await getDocs(collection(db, 'quizQuestions'));
       const list: QuizQuestion[] = snapshot.docs.map((docSnap) => {
-        const data = docSnap.data() as QuizQuestionDoc;
+        const data = docSnap.data() as QuizQuestionRecord;
         return {
           id: docSnap.id,
-          question: data.question ?? '',
+          question: data.question || '',
           options: data.options || [],
           correctAnswer: data.correctAnswer || '',
         };
@@ -214,6 +233,10 @@ export default function DosenPage() {
       setOptions(['', '', '', '']);
       setCorrectAnswer('');
       await loadQuestions();
+      void logRoleActivity('dosen.create_quiz', {
+        question,
+        totalOptions: options.length,
+      });
     } catch (err) {
       console.error('submitQuestion error', err);
       setStatus('Gagal menambahkan soal kuis.');

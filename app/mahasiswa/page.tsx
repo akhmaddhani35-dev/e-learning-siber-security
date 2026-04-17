@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { collection, addDoc, getDocs, Timestamp, doc, getDoc } from 'firebase/firestore';
-import { db } from '../../lib/firebase';
+import { auth, db } from '../../lib/firebase';
 import {
   DEFAULT_COURSE_ID,
   getStudentAttendanceHistory,
@@ -30,25 +30,29 @@ interface QuizResult {
   id: string;
   score: number;
   total: number;
-  attemptedAt: Timestamp;
+  attemptedAt: {
+    seconds: number;
+  };
 }
 
-interface AttendanceHistoryItem {
-  session: AttendanceSession;
-  attendance: AttendanceRecord | null;
-}
-
-interface QuizQuestionDoc {
+interface QuizQuestionRecord {
   question?: string;
   options?: string[];
   correctAnswer?: string;
 }
 
-interface QuizResultDoc {
+interface QuizResultRecord {
   userUid?: string;
   score?: number;
   total?: number;
-  attemptedAt?: Timestamp;
+  attemptedAt?: {
+    seconds: number;
+  };
+}
+
+interface AttendanceHistoryItem {
+  session: AttendanceSession;
+  attendance: AttendanceRecord | null;
 }
 
 const COURSE_ID = DEFAULT_COURSE_ID;
@@ -114,15 +118,35 @@ export default function MahasiswaPage() {
     verifyAndSetUser();
   }, [router]);
 
+  const logRoleActivity = async (action: string, metadata?: Record<string, unknown>) => {
+    try {
+      if (!auth.currentUser) {
+        return;
+      }
+
+      const idToken = await auth.currentUser.getIdToken();
+      await fetch('/api/system-logs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ action, metadata }),
+      });
+    } catch {
+      // Logging tidak boleh memblokir flow mahasiswa.
+    }
+  };
+
   const loadQuestions = async () => {
     try {
       setLoading(true);
       const snapshot = await getDocs(collection(db, 'quizQuestions'));
       const list: QuizQuestion[] = snapshot.docs.map((docSnap) => {
-        const data = docSnap.data() as QuizQuestionDoc;
+        const data = docSnap.data() as QuizQuestionRecord;
         return {
           id: docSnap.id,
-          question: data.question ?? '',
+          question: data.question || '',
           options: data.options || [],
           correctAnswer: data.correctAnswer || '',
         };
@@ -141,16 +165,16 @@ export default function MahasiswaPage() {
       const snapshot = await getDocs(collection(db, 'quizResults'));
       const list: QuizResult[] = snapshot.docs
         .filter((docSnap) => {
-          const data = docSnap.data() as QuizResultDoc;
+          const data = docSnap.data() as QuizResultRecord;
           return data.userUid === uid;
         })
         .map((docSnap) => {
-          const data = docSnap.data() as QuizResultDoc;
+          const data = docSnap.data() as QuizResultRecord;
           return {
             id: docSnap.id,
-            score: data.score ?? 0,
-            total: data.total ?? 0,
-            attemptedAt: data.attemptedAt ?? Timestamp.now(),
+            score: data.score || 0,
+            total: data.total || 0,
+            attemptedAt: data.attemptedAt || { seconds: 0 },
           };
         });
       setResults(list.sort((a, b) => b.attemptedAt.seconds - a.attemptedAt.seconds));
@@ -206,6 +230,10 @@ export default function MahasiswaPage() {
       setStatus(`Quiz selesai! Skor Anda ${score} dari ${total}`);
       setSelectedAnswers({});
       await loadResults(user.uid);
+      void logRoleActivity('mahasiswa.submit_quiz', {
+        score,
+        total,
+      });
     } catch (err) {
       console.error('submitQuiz error', err);
       setStatus('Gagal menyimpan hasil kuis.');

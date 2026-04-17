@@ -76,6 +76,20 @@ export default function LoginPage() {
         role: userData.role,
       }));
 
+      try {
+        const idToken = await user.getIdToken();
+        await fetch('/api/system-logs', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({ action: 'login' }),
+        });
+      } catch (logError) {
+        console.warn('System log login gagal dicatat:', logError);
+      }
+
       if (userData.role === 'admin' || userData.role === 'dosen' || userData.role === 'mahasiswa') {
         router.push('/dashboard');
       } else {
@@ -95,10 +109,10 @@ export default function LoginPage() {
       }
 
       if (
-        errorCode === 'auth/invalid-credential' ||
-        errorCode === 'auth/invalid-login-credentials' ||
         errorCode === 'auth/user-not-found' ||
-        errorCode === 'auth/wrong-password'
+        errorCode === 'auth/wrong-password' ||
+        errorCode === 'auth/invalid-credential' ||
+        errorCode === 'auth/invalid-login-credentials'
       ) {
         message = 'Email atau password tidak valid.';
       } else if (errorCode === 'auth/configuration-not-found') {
@@ -244,16 +258,10 @@ export default function LoginPage() {
             </button>
           </form>
 
-          {/* Register Link */}
+          {/* Account Info */}
           <div className="mt-6 text-center">
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              Belum punya akun?{' '}
-              <a
-                href="/register"
-                className="font-semibold text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300 transition-colors duration-200"
-              >
-                Daftar di sini
-              </a>
+              Belum punya akun? Hubungi admin agar akun dibuat dari menu manajemen user.
             </p>
           </div>
         </div>

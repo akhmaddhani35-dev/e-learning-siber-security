@@ -2,8 +2,14 @@ import jwt from 'jsonwebtoken';
 import { createPrivateKey } from 'crypto';
 
 const GOOGLE_OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
-const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
+const GOOGLE_API_SCOPES = [
+  'https://www.googleapis.com/auth/datastore',
+  'https://www.googleapis.com/auth/identitytoolkit',
+].join(' ');
 const FIREBASE_AUTH_LOOKUP_URL = 'https://identitytoolkit.googleapis.com/v1/accounts:lookup';
+const FIREBASE_AUTH_SIGN_IN_URL = 'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword';
+const FIREBASE_AUTH_SIGN_UP_URL = 'https://identitytoolkit.googleapis.com/v1/accounts:signUp';
+const FIREBASE_AUTH_UPDATE_URL = 'https://identitytoolkit.googleapis.com/v1/accounts:update';
 
 type FirestoreFieldValue =
   | { nullValue: null }
@@ -18,6 +24,10 @@ type FirestoreFieldValue =
 interface FirestoreDocument {
   name?: string;
   fields?: Record<string, FirestoreFieldValue>;
+}
+
+interface FirestoreListResponse {
+  documents?: FirestoreDocument[];
 }
 
 interface VerifiedFirebaseUser {
@@ -67,7 +77,7 @@ function createServiceAccountAssertion(): string {
     iss: process.env.FIREBASE_CLIENT_EMAIL,
     sub: process.env.FIREBASE_CLIENT_EMAIL,
     aud: GOOGLE_OAUTH_TOKEN_URL,
-    scope: FIRESTORE_SCOPE,
+    scope: GOOGLE_API_SCOPES,
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + 3600,
   };
@@ -263,6 +273,112 @@ export async function readFromFirestore<T>(documentPath: string): Promise<T | nu
   return fromFirestoreDocument<T>(payload);
 }
 
+export async function listFirestoreCollection<T>(collectionPath: string): Promise<T[]> {
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const token = await getFirebaseAccessToken();
+
+  if (!projectId) {
+    throw new Error('Missing FIREBASE_PROJECT_ID');
+  }
+
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collectionPath}`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (response.status === 404) {
+    return [];
+  }
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Firestore list failed: ${response.status} ${text}`);
+  }
+
+  const payload = (await response.json()) as FirestoreListResponse;
+  return (payload.documents ?? []).map((document) => {
+    const data = fromFirestoreDocument<Record<string, unknown>>(document);
+    const documentName = document.name ?? '';
+    const documentId = documentName.split('/').pop() ?? '';
+
+    if (!('id' in data) && documentId) {
+      data.id = documentId;
+    }
+
+    return data as T;
+  });
+}
+
+export async function patchFirestoreDocument(
+  documentPath: string,
+  data: Record<string, unknown>,
+  fieldPaths?: string[]
+): Promise<void> {
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const token = await getFirebaseAccessToken();
+
+  if (!projectId) {
+    throw new Error('Missing FIREBASE_PROJECT_ID');
+  }
+
+  const params = new URLSearchParams();
+  for (const fieldPath of fieldPaths ?? Object.keys(data)) {
+    params.append('updateMask.fieldPaths', fieldPath);
+  }
+
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${documentPath}?${params.toString()}`;
+  const firestoreData: Record<string, FirestoreFieldValue> = {};
+
+  for (const [key, value] of Object.entries(data)) {
+    firestoreData[key] = toFirestoreFieldValue(value);
+  }
+
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      fields: firestoreData,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Firestore patch failed: ${response.status} ${text}`);
+  }
+}
+
+export async function deleteFromFirestore(documentPath: string): Promise<void> {
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const token = await getFirebaseAccessToken();
+
+  if (!projectId) {
+    throw new Error('Missing FIREBASE_PROJECT_ID');
+  }
+
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${documentPath}`;
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (response.status === 404) {
+    return;
+  }
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Firestore delete failed: ${response.status} ${text}`);
+  }
+}
+
 export async function verifyFirebaseIdToken(idToken: string): Promise<VerifiedFirebaseUser> {
   const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
 
@@ -299,4 +415,145 @@ export async function verifyFirebaseIdToken(idToken: string): Promise<VerifiedFi
     uid: user.localId,
     email: user.email ?? null,
   };
+}
+
+function getFirebaseApiKey(): string {
+  const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
+  if (!apiKey) {
+    throw new Error('Missing NEXT_PUBLIC_FIREBASE_API_KEY');
+  }
+  return apiKey;
+}
+
+export async function signInFirebaseUser(email: string, password: string): Promise<{ idToken: string }> {
+  const apiKey = getFirebaseApiKey();
+  const response = await fetch(`${FIREBASE_AUTH_SIGN_IN_URL}?key=${apiKey}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      email,
+      password,
+      returnSecureToken: true,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Firebase sign-in failed: ${response.status} ${text}`);
+  }
+
+  const payload = (await response.json()) as {
+    idToken?: string;
+  };
+
+  if (!payload.idToken) {
+    throw new Error('Firebase sign-in response missing idToken');
+  }
+
+  return { idToken: payload.idToken };
+}
+
+export async function createFirebaseUser(
+  email: string,
+  password: string
+): Promise<{ uid: string; email: string | null }> {
+  const apiKey = getFirebaseApiKey();
+  const response = await fetch(`${FIREBASE_AUTH_SIGN_UP_URL}?key=${apiKey}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      email,
+      password,
+      returnSecureToken: true,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Firebase sign-up failed: ${response.status} ${text}`);
+  }
+
+  const payload = (await response.json()) as {
+    localId?: string;
+    email?: string;
+  };
+
+  if (!payload.localId) {
+    throw new Error('Firebase sign-up response missing localId');
+  }
+
+  return {
+    uid: payload.localId,
+    email: payload.email ?? null,
+  };
+}
+
+export async function updateFirebaseAccount(
+  idToken: string,
+  updates: {
+    email?: string;
+    password?: string;
+  }
+): Promise<{ email?: string | null }> {
+  const apiKey = getFirebaseApiKey();
+  const response = await fetch(`${FIREBASE_AUTH_UPDATE_URL}?key=${apiKey}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      idToken,
+      returnSecureToken: true,
+      ...updates,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Firebase account update failed: ${response.status} ${text}`);
+  }
+
+  const payload = (await response.json()) as {
+    email?: string;
+  };
+
+  return {
+    email: payload.email ?? null,
+  };
+}
+
+export async function adminUpdateFirebaseUser(
+  localId: string,
+  updates: {
+    password?: string;
+  }
+): Promise<void> {
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const token = await getFirebaseAccessToken();
+
+  if (!projectId) {
+    throw new Error('Missing FIREBASE_PROJECT_ID');
+  }
+
+  const response = await fetch(`https://identitytoolkit.googleapis.com/v1/projects/${projectId}/accounts:update`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      localId,
+      returnSecureToken: true,
+      ...updates,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Firebase admin account update failed: ${response.status} ${text}`);
+  }
 }

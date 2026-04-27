@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { doc, getDoc } from 'firebase/firestore';
-import { db } from '../../lib/firebase';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { auth, db } from '../../lib/firebase';
 
 interface User {
   uid: string;
@@ -17,19 +18,30 @@ export default function AdminPage() {
   const router = useRouter();
 
   useEffect(() => {
-    const verifyAndSetUser = async () => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       try {
+        if (!firebaseUser) {
+          localStorage.removeItem('user');
+          router.push('/login');
+          return;
+        }
+
         const storedUser = localStorage.getItem('user');
         if (!storedUser) {
           router.push('/login');
           return;
         }
 
-        const userData = JSON.parse(storedUser);
-        // Verify role dari Firestore (lebih aman)
-        const userRef = doc(db, 'users', userData.uid);
+        const userData = JSON.parse(storedUser) as User;
+        if (userData.uid !== firebaseUser.uid) {
+          localStorage.removeItem('user');
+          router.push('/login');
+          return;
+        }
+
+        const userRef = doc(db, 'users', firebaseUser.uid);
         const userDoc = await getDoc(userRef);
-        
+
         if (!userDoc.exists()) {
           router.push('/login');
           return;
@@ -42,8 +54,8 @@ export default function AdminPage() {
         }
 
         setUser({
-          uid: userData.uid,
-          email: userData.email,
+          uid: firebaseUser.uid,
+          email: firebaseUser.email ?? userData.email,
           role: firestoreData.role,
         });
       } catch (err) {
@@ -52,13 +64,14 @@ export default function AdminPage() {
       } finally {
         setLoading(false);
       }
-    };
+    });
 
-    verifyAndSetUser();
+    return () => unsubscribe();
   }, [router]);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     localStorage.removeItem('user');
+    await signOut(auth);
     router.push('/login');
   };
 

@@ -14,10 +14,21 @@ import {
 import { Timestamp, addDoc, collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { isDeadlinePassed, normalizeDeadline, toDatetimeLocalValue } from '../../lib/deadline';
 import { auth, db } from '../../lib/firebase';
+import {
+  DEFAULT_COURSE_ID,
+  createAttendanceSession,
+  getAttendanceSessionReport,
+  getAttendanceSessions,
+  getStudentAttendanceHistory,
+  submitAttendance,
+  type AttendanceRecord,
+  type AttendanceReportItem,
+  type AttendanceSession,
+} from '../../lib/attendance';
 import { searchCourses, searchUsers } from '../../lib/search-service';
 
 type Role = 'admin' | 'dosen' | 'mahasiswa';
-type Tab = 'materials' | 'quiz' | 'users' | 'chatbot' | 'profile';
+type Tab = 'materials' | 'quiz' | 'attendance' | 'users' | 'chatbot' | 'profile';
 
 interface UserInfo {
   uid: string;
@@ -119,7 +130,13 @@ interface DetectorResult {
   explanation: string;
 }
 
+interface AttendanceHistoryItem {
+  session: AttendanceSession;
+  attendance: AttendanceRecord | null;
+}
+
 const emptyOptions = ['', '', '', ''];
+const emptyAttendanceForm = { title: '', date: '', deadline: '' };
 const chatbotSuggestions = [
   'Jelaskan phishing dengan bahasa sederhana',
   'Buat ringkasan materi tentang password yang kuat',
@@ -152,6 +169,17 @@ export default function DashboardPage() {
   const [loadingQuestions, setLoadingQuestions] = useState(false);
   const [loadingResults, setLoadingResults] = useState(false);
   const [savingQuiz, setSavingQuiz] = useState(false);
+  const [attendanceStatus, setAttendanceStatus] = useState('');
+  const [loadingAttendance, setLoadingAttendance] = useState(false);
+  const [savingAttendance, setSavingAttendance] = useState(false);
+  const [attendanceSessions, setAttendanceSessions] = useState<AttendanceSession[]>([]);
+  const [attendanceHistory, setAttendanceHistory] = useState<AttendanceHistoryItem[]>([]);
+  const [attendanceReport, setAttendanceReport] = useState<AttendanceReportItem[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState('');
+  const [attendanceChoices, setAttendanceChoices] = useState<Record<string, 'hadir' | 'izin'>>({});
+  const [attendanceReasons, setAttendanceReasons] = useState<Record<string, string>>({});
+  const [attendanceSavingId, setAttendanceSavingId] = useState('');
+  const [attendanceForm, setAttendanceForm] = useState(emptyAttendanceForm);
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -197,6 +225,8 @@ export default function DashboardPage() {
   const canManageUsers = useMemo(() => user?.role === 'admin', [user]);
   const canManageQuiz = useMemo(() => user?.role === 'admin' || user?.role === 'dosen', [user]);
   const canTakeQuiz = useMemo(() => user?.role === 'mahasiswa', [user]);
+  const canManageAttendance = useMemo(() => user?.role === 'admin' || user?.role === 'dosen', [user]);
+  const canTakeAttendance = useMemo(() => user?.role === 'mahasiswa', [user]);
   const displayName = useMemo(() => {
     if (profile?.username?.trim()) {
       return profile.username;
@@ -547,6 +577,64 @@ export default function DashboardPage() {
     }
   };
 
+  const loadAttendanceSessions = useCallback(async (loadReport = false) => {
+    try {
+      setLoadingAttendance(true);
+      setAttendanceStatus('');
+      const sessions = await getAttendanceSessions(DEFAULT_COURSE_ID);
+      setAttendanceSessions(sessions);
+
+      if (!loadReport) {
+        return;
+      }
+
+      const nextSessionId = selectedSessionId || sessions[0]?.id || '';
+      setSelectedSessionId(nextSessionId);
+
+      if (!nextSessionId) {
+        setAttendanceReport([]);
+        return;
+      }
+
+      const report = await getAttendanceSessionReport(nextSessionId);
+      setAttendanceReport(report);
+    } catch (err) {
+      const error = err as FirestoreErrorLike;
+      setAttendanceStatus(error.message || 'Gagal memuat data absensi.');
+    } finally {
+      setLoadingAttendance(false);
+    }
+  }, [selectedSessionId]);
+
+  const loadAttendanceHistory = useCallback(async (uid: string) => {
+    try {
+      setLoadingAttendance(true);
+      setAttendanceStatus('');
+      const history = await getStudentAttendanceHistory(DEFAULT_COURSE_ID, uid);
+      setAttendanceHistory(history);
+    } catch (err) {
+      const error = err as FirestoreErrorLike;
+      setAttendanceStatus(error.message || 'Gagal memuat riwayat absensi.');
+    } finally {
+      setLoadingAttendance(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user || activeTab !== 'attendance') {
+      return;
+    }
+
+    if (canManageAttendance) {
+      void loadAttendanceSessions(true);
+      return;
+    }
+
+    if (canTakeAttendance) {
+      void loadAttendanceHistory(user.uid);
+    }
+  }, [activeTab, canManageAttendance, canTakeAttendance, loadAttendanceHistory, loadAttendanceSessions, user]);
+
   const loadTeacherResults = async () => {
     try {
       setLoadingResults(true);
@@ -748,6 +836,65 @@ export default function DashboardPage() {
       setQuizStatus(error.message || 'Gagal menyimpan hasil quiz.');
     } finally {
       setSavingQuiz(false);
+    }
+  };
+
+  const handleCreateAttendanceSession = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !canManageAttendance) return setAttendanceStatus('Anda tidak berwenang membuat sesi absensi.');
+    try {
+      setSavingAttendance(true);
+      setAttendanceStatus('Menyimpan sesi absensi...');
+      await createAttendanceSession({
+        course_id: DEFAULT_COURSE_ID,
+        title: attendanceForm.title,
+        date: attendanceForm.date,
+        deadline: attendanceForm.deadline,
+        created_by: user.uid,
+      });
+      setAttendanceForm(emptyAttendanceForm);
+      setAttendanceStatus('Sesi absensi berhasil dibuat.');
+      await loadAttendanceSessions(true);
+    } catch (err) {
+      const error = err as FirestoreErrorLike;
+      setAttendanceStatus(error.message || 'Gagal membuat sesi absensi.');
+    } finally {
+      setSavingAttendance(false);
+    }
+  };
+
+  const handleViewAttendanceReport = async (sessionId: string) => {
+    try {
+      setLoadingAttendance(true);
+      setAttendanceStatus('');
+      setSelectedSessionId(sessionId);
+      const report = await getAttendanceSessionReport(sessionId);
+      setAttendanceReport(report);
+    } catch (err) {
+      const error = err as FirestoreErrorLike;
+      setAttendanceStatus(error.message || 'Gagal memuat rekap absensi.');
+    } finally {
+      setLoadingAttendance(false);
+    }
+  };
+
+  const handleSubmitAttendance = async (sessionId: string) => {
+    if (!user || !canTakeAttendance) return setAttendanceStatus('Hanya mahasiswa yang dapat mengirim absensi.');
+
+    const selectedStatus = attendanceChoices[sessionId] || 'hadir';
+    const reason = attendanceReasons[sessionId] || '';
+
+    try {
+      setAttendanceSavingId(sessionId);
+      setAttendanceStatus('Menyimpan absensi...');
+      await submitAttendance(sessionId, user.uid, selectedStatus, reason);
+      setAttendanceStatus('Absensi berhasil dikirim.');
+      await loadAttendanceHistory(user.uid);
+    } catch (err) {
+      const error = err as FirestoreErrorLike;
+      setAttendanceStatus(error.message || 'Gagal mengirim absensi.');
+    } finally {
+      setAttendanceSavingId('');
     }
   };
 
@@ -1252,6 +1399,33 @@ export default function DashboardPage() {
   };
 
   const formatDate = (seconds?: number) => (seconds ? new Date(seconds * 1000).toLocaleDateString('id-ID') : '-');
+  const formatAttendanceDate = (value?: string | Timestamp | Date | null) => {
+    if (!value) return '-';
+    const date =
+      value instanceof Timestamp
+        ? value.toDate()
+        : value instanceof Date
+          ? value
+          : new Date(value);
+    return Number.isNaN(date.getTime())
+      ? '-'
+      : date.toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' });
+  };
+  const getAttendanceLabel = (attendanceState?: string | null) => {
+    if (attendanceState === 'hadir') return 'Hadir';
+    if (attendanceState === 'izin') return 'Izin';
+    return 'Tidak Hadir';
+  };
+  const getAttendanceBadgeClass = (attendanceState?: string | null) => {
+    if (attendanceState === 'hadir') {
+      return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300';
+    }
+    if (attendanceState === 'izin') {
+      return 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300';
+    }
+    return 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300';
+  };
+
   const formatDeadline = (deadline?: string) => {
     if (!deadline) {
       return 'Belum ditentukan';
@@ -1335,7 +1509,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="space-y-2">
-            {(['materials', 'quiz', 'chatbot', 'profile'] as Tab[]).map((tab) => (
+            {(['materials', 'quiz', 'attendance', 'chatbot', 'profile'] as Tab[]).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -1370,7 +1544,7 @@ export default function DashboardPage() {
                   Dashboard Pembelajaran
                 </h1>
                 <p className="text-gray-600 dark:text-gray-400">
-                  Materi, quiz, pengguna, dan AI assistant sekarang ada dalam satu alur yang konsisten.
+                  Materi, quiz, absensi, pengguna, dan AI assistant sekarang ada dalam satu alur yang konsisten.
                 </p>
               </div>
               <div className={`grid gap-3 text-sm ${canManageUsers ? 'grid-cols-2 md:grid-cols-3 xl:grid-cols-4' : 'grid-cols-2'}`}>
@@ -1387,6 +1561,10 @@ export default function DashboardPage() {
                 <div className="rounded-xl bg-white/70 dark:bg-gray-700/60 px-4 py-3 border border-white/30 dark:border-gray-600/30">
                   <div className="text-gray-500 dark:text-gray-400">Quiz</div>
                   <div className="text-xl font-bold text-gray-900 dark:text-white">{questions.length}</div>
+                </div>
+                <div className="rounded-xl bg-white/70 dark:bg-gray-700/60 px-4 py-3 border border-white/30 dark:border-gray-600/30">
+                  <div className="text-gray-500 dark:text-gray-400">Absensi</div>
+                  <div className="text-xl font-bold text-gray-900 dark:text-white">{attendanceSessions.length}</div>
                 </div>
                 {canManageUsers && (
                   <div className="rounded-xl bg-white/70 dark:bg-gray-700/60 px-4 py-3 border border-white/30 dark:border-gray-600/30">
@@ -1974,6 +2152,251 @@ export default function DashboardPage() {
                   </div>
                 )}
               </section>
+            </div>
+          )}
+
+          {activeTab === 'attendance' && (
+            <div className="space-y-6">
+              {attendanceStatus && (
+                <section className={`${cardClass} p-4 md:p-5`}>
+                  <p className="text-sm text-gray-700 dark:text-gray-200">{attendanceStatus}</p>
+                </section>
+              )}
+
+              {canManageAttendance && (
+                <>
+                  <section className={`${cardClass} p-6 md:p-8`}>
+                    <h2 className="mb-2 text-2xl font-bold text-gray-900 dark:text-white">Buat Sesi Absensi</h2>
+                    <p className="mb-6 text-gray-600 dark:text-gray-400">Atur pertemuan dan deadline absensi langsung dari dashboard.</p>
+                    <form onSubmit={handleCreateAttendanceSession} className="grid gap-4 md:grid-cols-2">
+                      <div className="md:col-span-2">
+                        <input
+                          value={attendanceForm.title}
+                          onChange={(e) => setAttendanceForm((prev) => ({ ...prev, title: e.target.value }))}
+                          placeholder="Judul pertemuan"
+                          className={inputClass}
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Tanggal Pertemuan</label>
+                        <input
+                          type="datetime-local"
+                          value={attendanceForm.date}
+                          onChange={(e) => setAttendanceForm((prev) => ({ ...prev, date: e.target.value }))}
+                          className={inputClass}
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Deadline Absensi</label>
+                        <input
+                          type="datetime-local"
+                          value={attendanceForm.deadline}
+                          onChange={(e) => setAttendanceForm((prev) => ({ ...prev, deadline: e.target.value }))}
+                          className={inputClass}
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={savingAttendance}
+                        className="md:col-span-2 w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold py-3 px-4 rounded-xl transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none shadow-lg hover:shadow-xl"
+                      >
+                        {savingAttendance ? 'Menyimpan...' : 'Buat Sesi Absensi'}
+                      </button>
+                    </form>
+                  </section>
+
+                  <section className={`${cardClass} p-6 md:p-8`}>
+                    <h2 className="mb-6 text-2xl font-bold text-gray-900 dark:text-white">Kelola Sesi & Rekap</h2>
+                    {loadingAttendance ? (
+                      <p className="text-gray-600 dark:text-gray-400">Memuat data absensi...</p>
+                    ) : attendanceSessions.length === 0 ? (
+                      <p className="text-gray-600 dark:text-gray-400">Belum ada sesi absensi.</p>
+                    ) : (
+                      <div className="space-y-6">
+                        <div className="overflow-x-auto rounded-2xl border border-gray-200 dark:border-gray-700">
+                          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                            <thead className="bg-gray-50 dark:bg-gray-900">
+                              <tr>
+                                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Judul</th>
+                                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Tanggal</th>
+                                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Deadline</th>
+                                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Status</th>
+                                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Aksi</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
+                              {attendanceSessions.map((session) => (
+                                <tr key={session.id}>
+                                  <td className="px-4 py-4 text-sm text-gray-900 dark:text-white">{session.title}</td>
+                                  <td className="px-4 py-4 text-sm text-gray-600 dark:text-gray-300">{formatAttendanceDate(session.date)}</td>
+                                  <td className="px-4 py-4 text-sm text-gray-600 dark:text-gray-300">{formatAttendanceDate(session.deadline)}</td>
+                                  <td className="px-4 py-4 text-sm">
+                                    <span className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${isDeadlinePassed(session.deadline) ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'}`}>
+                                      {isDeadlinePassed(session.deadline) ? 'Ditutup' : 'Aktif'}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-4 text-sm">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleViewAttendanceReport(session.id)}
+                                      className="rounded-xl border border-gray-200 dark:border-gray-700 px-4 py-2 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900"
+                                    >
+                                      Lihat Rekap
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {selectedSessionId && (
+                          <div className="rounded-2xl bg-gray-50 dark:bg-gray-900 p-6 border border-gray-200 dark:border-gray-700">
+                            <h3 className="mb-4 text-xl font-semibold text-gray-900 dark:text-white">Rekap Kehadiran Mahasiswa</h3>
+                            {attendanceReport.length === 0 ? (
+                              <p className="text-gray-600 dark:text-gray-300">Belum ada data mahasiswa untuk sesi ini.</p>
+                            ) : (
+                              <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                                  <thead>
+                                    <tr>
+                                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Mahasiswa</th>
+                                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Status</th>
+                                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Alasan</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                                    {attendanceReport.map((item) => (
+                                      <tr key={item.user_id}>
+                                        <td className="px-4 py-4 text-sm text-gray-900 dark:text-white">{item.email}</td>
+                                        <td className="px-4 py-4 text-sm">
+                                          <span className={`inline-flex w-fit rounded-full px-3 py-1 text-xs font-semibold ${getAttendanceBadgeClass(item.status)}`}>
+                                            {getAttendanceLabel(item.status)}
+                                          </span>
+                                        </td>
+                                        <td className="px-4 py-4 text-sm text-gray-600 dark:text-gray-300">{item.reason || '-'}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </section>
+                </>
+              )}
+
+              {canTakeAttendance && (
+                <>
+                  <section className={`${cardClass} p-6 md:p-8`}>
+                    <h2 className="mb-2 text-2xl font-bold text-gray-900 dark:text-white">Absensi Saya</h2>
+                    <p className="mb-6 text-gray-600 dark:text-gray-400">Isi kehadiran dan cek status tiap pertemuan langsung dari dashboard.</p>
+                    {loadingAttendance ? (
+                      <p className="text-gray-600 dark:text-gray-400">Memuat sesi absensi...</p>
+                    ) : attendanceHistory.length === 0 ? (
+                      <p className="text-gray-600 dark:text-gray-400">Belum ada sesi absensi yang tersedia.</p>
+                    ) : (
+                      <div className="space-y-4">
+                        {attendanceHistory.map(({ session, attendance }) => {
+                          const selectedChoice = attendanceChoices[session.id] || 'hadir';
+                          const deadlinePassed = isDeadlinePassed(session.deadline);
+                          const alreadySubmitted = Boolean(attendance);
+
+                          return (
+                            <article key={session.id} className="rounded-2xl bg-gradient-to-r from-white to-gray-50 dark:from-gray-700 dark:to-gray-600 shadow-lg border border-white/20 dark:border-gray-600/20 p-5">
+                              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                <div>
+                                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{session.title}</h3>
+                                  <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Pertemuan: {formatAttendanceDate(session.date)}</p>
+                                  <p className="text-sm text-gray-600 dark:text-gray-300">Deadline: {formatAttendanceDate(session.deadline)}</p>
+                                </div>
+                                <span className={`inline-flex w-fit rounded-full px-3 py-1 text-xs font-semibold ${getAttendanceBadgeClass(attendance?.status)}`}>
+                                  {alreadySubmitted ? getAttendanceLabel(attendance?.status) : deadlinePassed ? 'Tidak Hadir' : 'Belum Absen'}
+                                </span>
+                              </div>
+
+                              {alreadySubmitted ? (
+                                <div className="mt-4 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-4 text-sm text-blue-700 dark:text-blue-300">
+                                  <p>Status absensi Anda: <strong>{getAttendanceLabel(attendance?.status)}</strong></p>
+                                  <p className="mt-1">Alasan izin: {attendance?.reason || '-'}</p>
+                                </div>
+                              ) : deadlinePassed ? (
+                                <div className="mt-4 rounded-xl bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 p-4 text-sm text-rose-700 dark:text-rose-300">
+                                  Deadline sudah lewat. Status absensi tercatat sebagai tidak hadir.
+                                </div>
+                              ) : (
+                                <div className="mt-4 grid gap-4">
+                                  <div>
+                                    <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Status Kehadiran</label>
+                                    <select
+                                      value={selectedChoice}
+                                      onChange={(e) => setAttendanceChoices((prev) => ({ ...prev, [session.id]: e.target.value as 'hadir' | 'izin' }))}
+                                      className={inputClass}
+                                    >
+                                      <option value="hadir">Hadir</option>
+                                      <option value="izin">Izin</option>
+                                    </select>
+                                  </div>
+
+                                  {selectedChoice === 'izin' && (
+                                    <div>
+                                      <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Alasan Izin</label>
+                                      <textarea
+                                        rows={3}
+                                        value={attendanceReasons[session.id] || ''}
+                                        onChange={(e) => setAttendanceReasons((prev) => ({ ...prev, [session.id]: e.target.value }))}
+                                        placeholder="Tulis alasan izin"
+                                        className={`${inputClass} resize-none`}
+                                      />
+                                    </div>
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSubmitAttendance(session.id)}
+                                    disabled={attendanceSavingId === session.id}
+                                    className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold py-3 px-4 rounded-xl transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none shadow-lg hover:shadow-xl"
+                                  >
+                                    {attendanceSavingId === session.id ? 'Menyimpan...' : 'Kirim Absensi'}
+                                  </button>
+                                </div>
+                              )}
+                            </article>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+
+                  <section className={`${cardClass} p-6 md:p-8`}>
+                    <h2 className="mb-6 text-2xl font-bold text-gray-900 dark:text-white">Riwayat Absensi</h2>
+                    {loadingAttendance ? (
+                      <p className="text-gray-600 dark:text-gray-400">Memuat riwayat absensi...</p>
+                    ) : attendanceHistory.length === 0 ? (
+                      <p className="text-gray-600 dark:text-gray-400">Belum ada riwayat absensi.</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {attendanceHistory.map(({ session, attendance }) => (
+                          <div key={`history-${session.id}`} className="rounded-xl bg-white/70 dark:bg-gray-700/60 px-4 py-4 border border-white/30 dark:border-gray-600/30">
+                            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                              <div>
+                                <div className="font-semibold text-gray-900 dark:text-white">{session.title}</div>
+                                <div className="text-sm text-gray-600 dark:text-gray-300">{formatAttendanceDate(session.date)}</div>
+                              </div>
+                              <span className={`inline-flex w-fit rounded-full px-3 py-1 text-xs font-semibold ${getAttendanceBadgeClass(attendance?.status)}`}>
+                                {getAttendanceLabel(attendance?.status)}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                </>
+              )}
             </div>
           )}
 

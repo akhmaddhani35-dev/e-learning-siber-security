@@ -1,5 +1,5 @@
 // lib/firebase.ts
-import { initializeApp } from 'firebase/app';
+import { getApp, getApps, initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
@@ -12,15 +12,17 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-if (typeof window !== 'undefined') {
-  console.log('Firebase Config Loaded:', {
-    projectId: firebaseConfig.projectId,
-    authDomain: firebaseConfig.authDomain,
-    apiKeyExists: !!firebaseConfig.apiKey,
-  });
+const missingConfigKeys = Object.entries(firebaseConfig)
+  .filter(([, value]) => !value)
+  .map(([key]) => key);
+
+if (missingConfigKeys.length > 0) {
+  throw new Error(
+    `Firebase client config belum lengkap. Missing: ${missingConfigKeys.join(', ')}`
+  );
 }
 
-const app = initializeApp(firebaseConfig);
+const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
 export const db = getFirestore(app);

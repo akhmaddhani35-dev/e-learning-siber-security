@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useEffectEvent, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import {
@@ -271,7 +271,7 @@ export default function DashboardPage() {
     return () => unsubscribe();
   }, []);
 
-  const initializeDashboard = useEffectEvent(async () => {
+  const initializeDashboard = useCallback(async () => {
     try {
       const stored = localStorage.getItem('user');
       if (!stored) {
@@ -309,7 +309,7 @@ export default function DashboardPage() {
     } catch {
       router.push('/login');
     }
-  });
+  }, [router]);
 
   useEffect(() => {
     if (authUser === undefined) {
@@ -322,7 +322,7 @@ export default function DashboardPage() {
       localStorage.removeItem('user');
       router.push('/login');
     }
-  }, [authUser, router]);
+  }, [authUser, initializeDashboard, router]);
 
   useEffect(() => {
     if (!user || activeTab !== 'quiz') {
@@ -438,13 +438,13 @@ export default function DashboardPage() {
     }
   };
 
-  const loadAssignmentSubmissionsOnMaterialsTab = useEffectEvent(async () => {
+  const loadAssignmentSubmissionsOnMaterialsTab = useCallback(async () => {
     await loadAssignmentSubmissions();
-  });
+  }, []);
 
-  const loadProfileOnProfileTab = useEffectEvent(async () => {
+  const loadProfileOnProfileTab = useCallback(async () => {
     await loadProfile();
-  });
+  }, []);
 
   const loadRoleLogs = async () => {
     try {
@@ -572,9 +572,9 @@ export default function DashboardPage() {
     }
   };
 
-  const loadTeacherResultsOnQuizTab = useEffectEvent(async () => {
+  const loadTeacherResultsOnQuizTab = useCallback(async () => {
     await loadTeacherResults();
-  });
+  }, []);
 
   const loadEmailSamples = async () => {
     try {
